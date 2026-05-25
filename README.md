@@ -142,7 +142,7 @@ Optimized and aggregated business-level datasets.
 
 ### 7.1. Fact and Dimension Tables  
  
-<img width="771" height="571" alt="image" src="https://github.com/user-attachments/assets/a0233440-1f51-48da-84bd-c69c9fe8f8ce" />  
+<img width="771" height="571" alt="image" src="https://github.com/user-attachments/assets/d51760f0-f8a6-4608-bc4c-2305202d88e6" />  
 
 ## 8. Reports Developed  
 ### 8.1. Purchase Orders Report  
