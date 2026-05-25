@@ -41,12 +41,14 @@ The solution follows a 3-layer Medallion Architecture:
 
 ### 3.1. Bronze Layer – Raw Ingestion
 **Objective**  
-Ingest raw CSV files without transformation.
+Ingest raw CSV files without transformation.  
+
 **Approach**  
 - Metadata-driven framework using config_file.json
 - Single notebook dynamically loads all tables
 - Uses a loop to read table names and source paths
-- Creates Delta tables in Bronze schema
+- Creates Delta tables in Bronze schema  
+
 **Key Features**  
 - Schema inference
 - Raw data preservation
@@ -58,6 +60,7 @@ Ingest raw CSV files without transformation.
 ### 3.2. Silver Layer – Clean & Transform
 **Objective**  
 Apply transformations based on the Mapping Sheet.  
+
 **Transformations Performed**  
 - Column renaming
 - Data type casting
@@ -66,11 +69,13 @@ Apply transformations based on the Mapping Sheet.
 - Deduplication
 - Table joins
 - Business rule application  
+
 **Data Quality Checks**  
 - Null validations on key columns
 - Primary key uniqueness
 - Date format validation
 - Referential integrity checks  
+
 Silver layer ensures:  
 Clean, structured, and validated data ready for modeling.  
 
@@ -108,11 +113,13 @@ Optimized and aggregated business-level datasets.
 
 ## 4. Metadata-Driven Framework
 **Config File (config_file.json)**  
+
 **Contains:**  
 - Table Name
 - Source Path
 - Target Layer
-- Load Type
+- Load Type  
+
 **Benefits**  
 - Reusable ingestion code
 - Easy onboarding of new tables
@@ -137,7 +144,6 @@ Optimized and aggregated business-level datasets.
  
 <img width="771" height="571" alt="image" src="https://github.com/user-attachments/assets/a0233440-1f51-48da-84bd-c69c9fe8f8ce" />  
 
-
 ## 8. Reports Developed  
 ### 8.1. Purchase Orders Report  
 
@@ -157,7 +163,8 @@ This project successfully implements a modern Supply Chain Analytics Platform us
 - Metadata-driven ingestion
 - Delta Live Tables
 - Star Schema modeling
-- Power BI dashboards
+- Power BI dashboards  
+
 The solution enables:
 - Real-time procurement visibility
 - Inventory optimization
