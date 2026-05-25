@@ -7,6 +7,7 @@ The solution includes:
 - Medallion architecture (Bronze, Silver, Gold layers) using Delta Live Tables (DLT)
 - Business-ready fact and dimension tables
 - Power BI dashboard with KPIs derived from the KPI sheet  
+
 The objective is to transform raw SAP data into analytical insights for:  
 - Purchase Order monitoring
 - Inventory performance tracking
