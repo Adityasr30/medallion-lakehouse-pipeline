@@ -1,172 +1,251 @@
 # Medallion Architecture using Databricks DLT Pipelines
 
-## 1. Objective
-Design and implement a scalable Supply Chain Data Model using SAP and IBP raw datasets.  
-The solution includes:  
-- Metadata-driven ingestion framework
-- Medallion architecture (Bronze, Silver, Gold layers) using Delta Live Tables (DLT)
-- Business-ready fact and dimension tables
-- Power BI dashboard with KPIs derived from the KPI sheet  
+An end-to-end **Supply Chain Analytics Platform** built on **Databricks Delta Live Tables (DLT)**, implementing a full Medallion architecture (Bronze → Silver → Gold) using SAP and IBP datasets. Business-ready fact and dimension tables power **Power BI dashboards** for procurement, inventory, and demand analytics.
 
-The objective is to transform raw SAP data into analytical insights for:  
-- Purchase Order monitoring
-- Inventory performance tracking
-- Demand analysis
+---
 
-## 2. Solution Architecture
-High-Level Architecture  
+## Overview
 
-<img width="1026" height="300" alt="image" src="https://github.com/user-attachments/assets/668e9fe7-be7c-49c8-9d89-ae6d42cadbe2" />  
+This project transforms raw SAP CSV extracts into an analytics-ready lakehouse using a config-driven, single-notebook DLT pipeline. All three layers, raw ingestion, cleansing & transformation, and star schema modeling, are declared in one DLT notebook and executed as a managed pipeline in Databricks.
 
-### Architecture Components  
-### 2.1. Data Source
-- 37 SAP tables (CSV format)
-- IBP Demand actual data
-- Stored in raw_data/ directory
+---
 
-### 2.2. Databricks
-- Metadata-driven ingestion
-- Delta Live Tables (DLT)
-- 3-layer Medallion architecture
+## Architecture  
 
-### 2.3. Power BI
-- Connected via HTTP path & server hostname
-- Data model relationships defined
-- KPI-driven dashboards
+<img width="1026" height="300" alt="image" src="https://github.com/user-attachments/assets/92fa853b-ce4f-476e-a59e-5b60c155bb06" />  
 
-## 3. Medallion Architecture Implementation
-The solution follows a 3-layer Medallion Architecture:  
+```
+SAP / IBP Source Data
+  └── 37 SAP tables (CSV) + IBP Demand Actual/Forecast
+        │
+        ▼  [Bronze Layer]
+        │  • Config-driven ingestion via config.json
+        │  • Single reusable function + loop loads all tables
+        │  • Schema inference, column name cleaning
+        │  • Audit column: dw_load_ts
+        │  • No transformations - raw data preserved as Delta tables
+        │
+Bronze Delta Tables (bronze.*)
+        │
+        ▼  [Silver Layer]
+        │  • Column renaming + data type casting
+        │  • Null handling + DQ checks via @dlt.expect_or_drop
+        │  • Deduplication (dropDuplicates)
+        │  • Multi-table joins (SAP tables joined using business keys)
+        │  • Business rule application (PO status, PO type, sourcing type)
+        │
+Silver Delta Tables (silver.*)
+        │
+        ▼  [Gold Layer]
+        │  • Star Schema - Fact + Dimension tables
+        │  • SCD Type 1 via dlt.apply_changes()
+        │  • Sequenced by dw_load_ts
+        │
+Gold Delta Tables (gold.*)
+        │
+        ▼
+Power BI Dashboards
+  ├── Purchase Orders Report
+  ├── Inventory Overview Report
+  └── Demand Analysis Report
+```
 
-<img width="442" height="261" alt="image" src="https://github.com/user-attachments/assets/f1b2f6a9-2b5b-4c75-abfb-984ea9e43218" />  
+---
 
-### 3.1. Bronze Layer – Raw Ingestion
-**Objective**  
-Ingest raw CSV files without transformation.  
+## Project Structure
 
-**Approach**  
-- Metadata-driven framework using config_file.json
-- Single notebook dynamically loads all tables
-- Uses a loop to read table names and source paths
-- Creates Delta tables in Bronze schema  
+```
+medallion-lakehouse-pipeline/
+│
+├── data/
+│   └── nbk_dlt_load_to_bronze_silver_gold.csv     # Raw SAP + IBP CSV source files (37 tables)
+│
+├── databricks/
+│   ├── nbk_dlt_load_to_bronze_silver_gold.ipynb   # Main DLT pipeline notebook
+│   └── config.json                                # Pipeline configuration (table names + source path)
+│
+├── pbi/
+│   └── supply_chain_report.pbix                   # Power BI report file
+│
+└── README.md
+```
 
-**Key Features**  
-- Schema inference
-- Raw data preservation
-- Audit columns (ingestion timestamp)
-- No transformations applied  
+---
 
-<img width="364" height="300" alt="image" src="https://github.com/user-attachments/assets/cd626304-fbb2-42d4-abc6-3bc99de4a51a" />  
+## Notebook - `nbk_dlt_load_to_bronze_silver_gold.ipynb`
 
-### 3.2. Silver Layer – Clean & Transform
-**Objective**  
-Apply transformations based on the Mapping Sheet.  
+A single Databricks DLT notebook that declares all Bronze, Silver, and Gold tables. Executed as a Delta Live Tables pipeline in Databricks.
 
-**Transformations Performed**  
-- Column renaming
-- Data type casting
-- Null handling
-- Data Quality (DQ) checks
-- Deduplication
-- Table joins
-- Business rule application  
+### Helper Functions
 
-**Data Quality Checks**  
-- Null validations on key columns
-- Primary key uniqueness
-- Date format validation
-- Referential integrity checks  
+| Function | Description |
+|---|---|
+| `path_exists(path)` | Checks if a file path exists in DBFS before attempting to load |
+| `clean_column_names(name)` | Lowercases column names and replaces special characters with `_`, collapsing consecutive underscores |
 
-Silver layer ensures:  
-Clean, structured, and validated data ready for modeling.  
+### Config
 
-<img width="369" height="244" alt="image" src="https://github.com/user-attachments/assets/bf52afa8-0a0e-4f82-89d4-c17ea25bec04" />  
+The pipeline reads `config.json` via `spark.conf.get("config_path")` - the config path is passed as a DLT pipeline parameter.
 
-### 3.3. Gold Layer – Business-Ready Model  
-**Objective**  
-Create analytical data model for reporting.  
+---
 
-**Design Pattern:**  
-Star Schema  
+## Bronze Layer
 
-**Components:**  
+All 43 raw CSV files are ingested using a **single reusable function** combined with a for loop, no separate notebook per table.
 
-**Fact Tables**  
-- Purchase Orders
-- Inventory
-- Demand
+```python
+def create_bronze_table(table_name, source_path):
+    @dlt.table(name=f"bronze.{table_name}", table_properties={"quality": "bronze"})
+    def bronze_table():
+        df = spark.read.format("csv").option("header", "true").load(source_path)
+        # Clean column names
+        # Add dw_load_ts audit column
+        return df
 
-**Dimension Tables**  
-- Material
-- Vendor
-- Plant
-- Date
-- Customer
+for bronze_table in bronze_tables:
+    if path_exists(f"{bronze_source_relative_path}/{bronze_table}.csv"):
+        create_bronze_table(bronze_table, source_path)
+```
 
-**SCD Implementation**  
-- SCD Type 1 (Overwrite strategy)
-- Used for master data dimensions  
+**Bronze tables ingested (43 total):**
 
-Gold layer provides:  
-Optimized and aggregated business-level datasets.  
- 
-<img width="411" height="390" alt="image" src="https://github.com/user-attachments/assets/6d9fc09f-1ea1-4b61-ba8f-8fcfdda8f158" />  
+| Category | Tables |
+|---|---|
+| Demand | `DEMAND_ACTUAL`, `DEMAND_FORECAST` |
+| Master Data | `MASTER_CUSTOMER`, `MASTER_CUSTOMER_PRODUCT`, `MASTER_LOCATION`, `MASTER_LOCATION_PRODUCT` |
+| Quality | `AUSP`, `AUSP_BATCH`, `QALS`, `QAVE` |
+| Purchasing | `EKBE`, `EKET`, `EKKO`, `EKPO` |
+| Vendor | `LFA1`, `LFB1`, `LFM1` |
+| Material | `MAKT`, `MARA`, `MARC`, `MARCH`, `MARD`, `MARDH`, `MBEW`, `MBEWH`, `MCH1`, `MCHB`, `MCHBH`, `MSLB`, `MSLBH` |
+| Production | `PLKO` |
+| Config/Text | `T001`, `T001K`, `T001L`, `T001W`, `T023T`, `T024`, `T024E`, `T077K`, `T134T`, `TCURF`, `TQ30T`, `TQ31T` |
 
-## 4. Metadata-Driven Framework
-**Config File (config_file.json)**  
+---
 
-**Contains:**  
-- Table Name
-- Source Path
-- Target Layer
-- Load Type  
+## Silver Layer
 
-**Benefits**  
-- Reusable ingestion code
-- Easy onboarding of new tables
-- Reduced manual intervention
-- Scalable design  
+Silver tables apply **DQ checks**, **transformations**, and **joins** using `@dlt.expect_or_drop` for data quality enforcement. All tables include a `dw_load_ts` audit column.
 
-<img width="940" height="871" alt="image" src="https://github.com/user-attachments/assets/17f60fc7-bb84-483a-95c7-a953edf51d86" />  
+### Silver Tables
 
-## 5. Directory Structure in Databricks  
+| Table | Source Bronze Tables | Key DQ Checks |
+|---|---|---|
+| `silver.customer` | `MASTER_CUSTOMER` | `market is not null` |
+| `silver.customer_product` | `MASTER_CUSTOMER_PRODUCT` | `market`, `material` not null |
+| `silver.location` | `MASTER_LOCATION` | `plant is not null` |
+| `silver.location_product` | `MASTER_LOCATION_PRODUCT` | `plant`, `material` not null |
+| `silver.product` | `MARA`, `MAKT`, `MARC`, `T023T`, `T134T` | `material is not null` |
+| `silver.batch` | `MCH1`, `MARA`, `MARC`, `MCHB` | `batch is not null` |
+| `silver.supplier` | `LFA1`, `LFB1`, `LFM1` | `supplier_number is not null` |
+| `silver.storage` | `T001L`, `T001W` | `plant`, `storage_location` not null |
+| `silver.uom` | `MARA` | `uom is not null` |
+| `silver.currency` | `TCURF` | `currency is not null` |
+| `silver.date` | Generated | `date is not null` |
+| `silver.purchase_order` | `EKPO`, `EKKO`, `EKET`, `T001`, `T001W`, `LFA1`, `T023T`, `MAKT`, `T024`, `T024E` | `purchase_order`, `item` not null |
+| `silver.inventory` | `MCHB`, `MCH1`, `MARA`, `MAKT`, `MARC`, `T001W`, `T001`, `LFA1`, `T001K` | `material`, `plant`, `storage_location`, `batch` not null |
+| `silver.inventory_month_end_stock` | `MCHBH`, `MCH1`, `MARA`, `MAKT`, `MARC`, `T001W` | `material`, `plant`, `storage_location`, `batch`, `period_id` not null |
+| `silver.batch_release_external` | `QALS`, `T001W`, `TQ30T`, `TQ31T`, `T001L`, `LFA1`, `MARA`, `T023T`, `T134T`, `MCH1`, `MARC`, `QAVE` | `inspection_lot is not null` |
+| `silver.batch_release_internal` | `QALS`, `T001W`, `TQ30T`, `TQ31T`, `T001L`, `QAVE` | `inspection_lot is not null` |
+| `silver.demand_actual` | `DEMAND_ACTUAL` | `period_id`, `material`, `market` not null |
+| `silver.demand_forecast` | `DEMAND_FORECAST` | `period_id`, `material`, `market` not null |
 
-<img width="599" height="489" alt="image" src="https://github.com/user-attachments/assets/d4fc0e27-87e4-4870-aede-6221c9041eba" />  
+### Business Rules Applied (Purchase Order)
 
-## 6. Delta Live Tables (DLT) Pipeline:  
- 
-<img width="940" height="450" alt="image" src="https://github.com/user-attachments/assets/04ed37d9-8f9c-4775-891b-88b75e12440f" />  
+| Rule | Logic |
+|---|---|
+| `po_status` | `open` if still_to_deliver > 0, else `closed` |
+| `po_type` | `direct` (NB), `indirect` (ZARB), `sto` (UB), else `other` |
+| `po_sub_type` | `subcontract po` (L), `turn key po` (blank/null), else `other` |
+| `sourcing_type` | `Internal Mfg` (UB), else `External Mfg` |
 
-## 7. Data Model  
+---
 
-<img width="940" height="483" alt="image" src="https://github.com/user-attachments/assets/5cfe915a-9442-460b-ba47-c9997e2f5a5a" />  
+## Gold Layer
 
-### 7.1. Fact and Dimension Tables  
- 
-<img width="932" height="691" alt="image" src="https://github.com/user-attachments/assets/a92b20b1-0cd9-4b71-815b-66a3de3ea5c0" />  
+Gold tables use `dlt.apply_changes()` with **SCD Type 1** (overwrite), sequenced by `dw_load_ts`. Implements a **Star Schema** for analytical reporting.
 
-## 8. Reports Developed  
-### 8.1. Purchase Orders Report  
+### Dimension Tables
 
-<img width="940" height="532" alt="image" src="https://github.com/user-attachments/assets/7ec5e8e6-4b94-4666-9fa8-a1a3e4390bee" />  
+| Table | Source | Natural Key |
+|---|---|---|
+| `gold.dim_customer` | `silver.customer` | `market` |
+| `gold.dim_customer_product` | `silver.customer_product` | `market`, `material` |
+| `gold.dim_location` | `silver.location` | `plant` |
+| `gold.dim_location_product` | `silver.location_product` | `plant`, `material` |
+| `gold.dim_batch` | `silver.batch` | `batch` |
+| `gold.dim_supplier` | `silver.supplier` | `supplier_number` |
+| `gold.dim_uom` | `silver.uom` | `uom` |
+| `gold.dim_storage` | `silver.storage` | `plant`, `storage_location` |
+| `gold.dim_currency` | `silver.currency` | `currency` |
 
-### 8.2. Inventory Overview Report  
- 
-<img width="940" height="532" alt="image" src="https://github.com/user-attachments/assets/e302cbdb-7bec-4bed-8bd0-77e4db264324" />  
+### Fact Tables
 
-### 8.3. Demand Analysis Report  
+| Table | Source | Natural Key |
+|---|---|---|
+| `gold.fact_purchase_order` | `silver.purchase_order` | `purchase_order`, `item` |
+| `gold.fact_inventory` | `silver.inventory` | `material`, `plant`, `storage_location`, `batch` |
+| `gold.fact_inventory_month_end_stock` | `silver.inventory_month_end_stock` | `material`, `plant`, `storage_location`, `batch`, `period_id` |
+| `gold.fact_batch_release_external` | `silver.batch_release_external` | `inspection_lot` |
+| `gold.fact_batch_release_internal` | `silver.batch_release_internal` | `inspection_lot` |
+| `gold.fact_demand_actual` | `silver.demand_actual` | `period_id`, `material`, `market` |
+| `gold.fact_demand_forecast` | `silver.demand_forecast` | `period_id`, `material`, `market` |
 
-<img width="940" height="532" alt="image" src="https://github.com/user-attachments/assets/5378f04a-d3ba-4d53-a3c2-8cccfc153a99" />  
+---
 
-## 9. Conclusion  
-This project successfully implements a modern Supply Chain Analytics Platform using:
-- Databricks Medallion Architecture
-- Metadata-driven ingestion
-- Delta Live Tables
-- Star Schema modeling
-- Power BI dashboards  
+## Config File - `config.json`
 
-The solution enables:
-- Real-time procurement visibility
-- Inventory optimization
-- Demand forecasting insights
-- Data-driven decision-making
+The pipeline reads its configuration from `config.json`, which lists all Bronze table names and the source data path. Passed to the DLT pipeline as a parameter (`config_path`).
+
+```json
+{
+  "bronze_tables": [
+    "DEMAND_ACTUAL",
+    "DEMAND_FORECAST",
+    "MASTER_CUSTOMER",
+    ...
+  ],
+  "bronze_source_relative_path": "/path/to/raw_data"
+}
+```
+
+To add a new table: add its name to `bronze_tables` and place the corresponding `.csv` file in the `raw_data` directory - no code changes required.
+
+---
+
+## Power BI Reports
+
+Connected to Databricks via HTTP path and server hostname. Three reports built on Gold layer tables:
+
+| Report | Key Metrics |
+|---|---|
+| Purchase Orders | Open PO value, delivery status, PO type breakdown, supplier performance |
+| Inventory Overview | Stock by plant/batch, month-end stock trends, shelf life tracking |
+| Demand Analysis | Actual vs forecast demand, market and material-level demand trends |
+
+---
+
+## Getting Started
+
+1. Clone this repository.
+2. Upload the CSV files from `data/` to your Databricks workspace raw data directory.
+3. Update `config.json` with your actual source path:
+   ```json
+   "bronze_source_relative_path": "/Workspace/Users/<your-email>/project/raw_data"
+   ```
+4. Create a Databricks **Delta Live Tables pipeline** and point it to `databricks/nbk_dlt_load_to_bronze_silver_gold.ipynb`.
+5. Add a pipeline parameter:
+   ```
+   config_path = /path/to/databricks/config.json
+   ```
+6. Run the pipeline - all Bronze, Silver, and Gold tables will be created automatically.
+7. Connect Power BI to your Databricks SQL warehouse using the HTTP path and server hostname.
+
+---
+
+## Tech Stack
+
+![Databricks](https://img.shields.io/badge/Databricks-DLT-red)
+![Delta Lake](https://img.shields.io/badge/Delta%20Lake-enabled-green)
+![PySpark](https://img.shields.io/badge/PySpark-3.x-orange)
+![Power BI](https://img.shields.io/badge/Power%20BI-Dashboard-yellow)
+![SAP](https://img.shields.io/badge/Source-SAP%20%2B%20IBP-blue)
