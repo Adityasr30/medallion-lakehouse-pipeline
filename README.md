@@ -13,7 +13,7 @@ This project transforms raw SAP CSV extracts into an analytics-ready lakehouse u
 ## Architecture  
 
 <img width="1026" height="300" alt="image" src="https://github.com/user-attachments/assets/92fa853b-ce4f-476e-a59e-5b60c155bb06" />  
-
+  
 ```
 SAP / IBP Source Data
   └── 37 SAP tables (CSV) + IBP Demand Actual/Forecast
